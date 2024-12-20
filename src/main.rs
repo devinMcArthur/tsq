@@ -53,30 +53,34 @@ fn process_empty_users(users: Vec<User>) {
     }
 }
 
-fn process_employee_users(users: Vec<User<users::WithEmployee, (), (WithBranch, WithUser)>>) {
+fn process_employee_users(users: Vec<User<users::WithEmployee<(WithBranch, WithUser)>, ()>>) {
     for user in users {
         let employee = match user.employee() {
             Some(employee) => employee,
             None => continue,
         };
         println!("Employee {:#?}", employee);
+        assert!(employee.branch().is_some());
         println!("Employee Branch {:#?}", employee.branch());
+        assert!(employee.user().is_some());
         println!("Employee User {:#?}", employee.user());
     }
 }
 
 fn process_preference_users(users: Vec<User<(), users::WithPreferences>>) {
     for user in users {
+        assert!(user.preferences().is_some());
         println!("{:#?}", user.preferences());
-        // user.employee()
     }
 }
 
 fn process_employee_preference_users(
-    users: Vec<User<users::WithEmployee, users::WithPreferences, (WithBranch, ())>>,
+    users: Vec<User<users::WithEmployee<(WithBranch, ())>, users::WithPreferences>>,
 ) {
     for user in users {
+        assert!(user.employee().is_some());
         println!("{:#?}", user.employee());
+        assert!(user.preferences().is_some());
         println!("{:#?}", user.preferences());
     }
 }
@@ -89,6 +93,7 @@ fn process_basic_employee(employees: Vec<Employee>) {
 
 fn process_branch_employee(employees: Vec<Employee<employees::WithBranch>>) {
     for employee in employees {
+        assert!(employee.branch().is_some());
         println!("{:#?}", employee.branch());
     }
 }
@@ -97,7 +102,9 @@ fn process_user_employee_branch(
     employees: Vec<Employee<employees::WithBranch, employees::WithUser>>,
 ) {
     for employee in employees {
+        assert!(employee.branch().is_some());
         println!("{:#?}", employee.branch());
+        assert!(employee.user().is_some());
         println!("{:#?}", employee.user());
     }
 }

@@ -4,17 +4,16 @@ use std::fmt::Debug;
 use crate::{employees::{Employee, EmployeeQueryBuilder, EmployeeRelations}, user_preferences::UserPreference};
 
 #[derive(Debug, Clone)]
-pub struct User<E = (), P = (), ER = ()> 
+pub struct User<E = (), P = ()> 
 where 
-    ER: EmployeeRelations + Debug + Clone + 'static,
-    ER::Branch:  Debug + Clone,
-    ER::User:   Debug + Clone
+    E: UserRelations,
+    P: UserRelations,
 {
     pub id: i32,
     pub name: &'static str,
     pub email: &'static str,
     pub employee_id: Option<i32>,
-    query_results: Option<UserQueryResults<ER>>,
+    query_results: Option<UserQueryResults<E::Employee>>,
     _relations: std::marker::PhantomData<(E, P)>,
 }
 
@@ -25,11 +24,10 @@ impl User {
 }
 
 // Methods available when employee data is loaded
-impl<P, ER> User<WithEmployee, P, ER> 
+impl<P, ER> User<WithEmployee<ER>, P> 
 where 
+    P: UserRelations,
     ER: EmployeeRelations + Debug + Clone + 'static,
-    ER::Branch: Debug + Clone,
-    ER::User: Debug + Clone
 {
     pub fn employee(&self) -> Option<&Employee<ER::Branch, ER::User>> {
         self.query_results
@@ -39,11 +37,9 @@ where
 }
 
 // Methods available when preferences are loaded
-impl<E, ER> User<E, WithPreferences, ER> 
+impl<E> User<E, WithPreferences> 
 where 
-    ER: EmployeeRelations + Debug + Clone + 'static,
-    ER::Branch: Debug + Clone,
-    ER::User: Debug + Clone
+    E: UserRelations,
 {
     pub fn preferences(&self) -> Option<&UserPreference> {
         self.query_results
@@ -63,13 +59,28 @@ where
 
 pub struct UserQueryBuilderInitial;
 
-pub trait UserRelations {}
-impl UserRelations for () {}
-impl UserRelations for WithEmployee {}
-impl UserRelations for WithPreferences {}
+pub trait UserRelations {
+    type Employee: EmployeeRelations + Debug + Clone + 'static;
+    type Preferences;
+}
+impl UserRelations for () {
+    type Employee = ();
+    type Preferences = ();
+}
+impl<ER: EmployeeRelations> UserRelations for WithEmployee<ER> 
+where 
+    ER: EmployeeRelations + Debug + Clone + 'static
+{
+    type Employee = ER;
+    type Preferences = ();
+}
+impl UserRelations for WithPreferences {
+    type Employee = ();
+    type Preferences = WithPreferences;
+}
 
 #[derive(Debug, Clone)]
-pub struct WithEmployee;
+pub struct WithEmployee<ER = ()>(std::marker::PhantomData<ER>);
 #[derive(Debug, Clone)]
 pub struct WithPreferences;
 
@@ -88,26 +99,16 @@ impl UserQueryBuilderInitial {
     }
 }
 
-pub struct UserQueryBuilder<E = (), P = (), ER = ()> 
+pub struct UserQueryBuilder<E = (), P = ()> 
 where 
-    ER: EmployeeRelations + 'static
+    E: UserRelations,
+    P: UserRelations,
 {
     condition: UserQueryBuilderCondition,
     _employee: std::marker::PhantomData<E>,
     employee_configuration:
-        Option<Arc<dyn Fn(EmployeeQueryBuilder) -> EmployeeQueryBuilder<ER::Branch, ER::User> + Send + Sync>>,
+        Option<Arc<dyn Fn(EmployeeQueryBuilder) -> EmployeeQueryBuilder<<E::Employee as EmployeeRelations>::Branch, <E::Employee as EmployeeRelations>::User> + Send + Sync>>,
     _preferences: std::marker::PhantomData<P>,
-}
-
-impl<B, U> UserQueryBuilder<B, U> {
-    pub fn new(condition: UserQueryBuilderCondition) -> Self {
-        Self {
-            condition,
-            _employee: std::marker::PhantomData,
-            employee_configuration: None,
-            _preferences: std::marker::PhantomData,
-        }
-    }
 }
 
 // Split into two impls - one for the builder methods and one for execute
@@ -116,12 +117,19 @@ where
     E: UserRelations,
     P: UserRelations,
 {
-    pub fn with_employee<F, B, U>(self, configurator: F) -> UserQueryBuilder<WithEmployee, P, (B, U)> 
+    pub fn new(condition: UserQueryBuilderCondition) -> Self {
+        Self {
+            condition,
+            _employee: std::marker::PhantomData,
+            employee_configuration: None,
+            _preferences: std::marker::PhantomData,
+        }
+    }
+
+    pub fn with_employee<F, ER>(self, configurator: F) -> UserQueryBuilder<WithEmployee<ER>, P> 
     where 
-        F: Fn(EmployeeQueryBuilder) -> EmployeeQueryBuilder<B, U> + Send + Sync + 'static,
-        B: Debug + Clone + Send + Sync + 'static,
-        U: Debug + Clone + Send + Sync + 'static,
-        (B, U): EmployeeRelations<Branch = B, User = U> + Debug + Clone + 'static
+        F: Fn(EmployeeQueryBuilder) -> EmployeeQueryBuilder<ER::Branch, ER::User> + Send + Sync + 'static,
+        ER: EmployeeRelations + Debug + Clone + 'static
     {
         UserQueryBuilder {
             condition: self.condition,
@@ -137,13 +145,9 @@ where
 }
 
 // Separate impl for execute that requires the loading traits
-impl<E: UserRelations + 'static, P: UserRelations + 'static, ER> UserQueryBuilder<E, P, ER> 
-where
-    ER: EmployeeRelations + Debug + Clone + 'static,
-    ER::Branch: Debug + Clone + Send + Sync + 'static,
-    ER::User: Debug + Clone + Send + Sync + 'static,
+impl<E: UserRelations + 'static, P: UserRelations + 'static> UserQueryBuilder<E, P> 
 {
-    pub async fn execute(&self) -> Vec<User<E, P, ER>> {
+    pub async fn execute(&self) -> Vec<User<E, P>> {
         tokio::time::sleep(std::time::Duration::from_millis(1)).await;
 
         let mut users = match &self.condition {
@@ -179,14 +183,11 @@ where
                 user_preferences: None,
             };
 
-            // Only load employee data if E is WithEmployee
-            if std::any::TypeId::of::<E>() == std::any::TypeId::of::<WithEmployee>() {
-                if let Some(employee_id) = user.employee_id {
-                    if let Some(ref configurator) = self.employee_configuration {
-                        let query = Employee::query().by_id(employee_id);
-                        let configured_query = configurator(query);
-                        query_results.employee = configured_query.execute_one().await;
-                    }
+            if let Some(employee_id) = user.employee_id {
+                if let Some(ref configurator) = self.employee_configuration {
+                    let query = Employee::query().by_id(employee_id);
+                    let configured_query = configurator(query);
+                    query_results.employee = configured_query.execute_one().await;
                 }
             }
 
@@ -204,7 +205,7 @@ where
         users
     }
 
-    pub async fn execute_one(&self) -> Option<User<E, P, ER>> {
+    pub async fn execute_one(&self) -> Option<User<E, P>> {
         self.execute().await.pop()
     }
 }

@@ -1,3 +1,4 @@
+use std::fmt::Debug;
 use crate::{branches::Branch, users::User};
 
 #[derive(Debug, Clone)]
@@ -22,8 +23,8 @@ pub struct EmployeeQueryResults {
 }
 
 pub trait EmployeeRelations {
-    type Branch;
-    type User;
+    type Branch: Debug + Clone + 'static;
+    type User: Debug + Clone + 'static;
 }
 impl EmployeeRelations for () {
     type Branch = ();
@@ -37,7 +38,11 @@ impl EmployeeRelations for WithUser {
     type Branch = ();
     type User = WithUser;
 }
-impl<B, U> EmployeeRelations for (B, U) {
+impl<B, U> EmployeeRelations for (B, U) 
+where
+    B: Debug + Clone + 'static,
+    U: Debug + Clone + 'static,
+{
     type Branch = B;
     type User = U;
 }
